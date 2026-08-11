@@ -162,6 +162,7 @@ canvas{display:block;width:100%;max-width:100%;height:auto;border-radius:10px;ba
   font-weight:700;padding:8px 12px;border-radius:999px;cursor:pointer;transition:.16s}
 .chip:hover{border-color:var(--line-2);color:var(--ink)}
 .chip.on{background:rgba(255,176,46,.14);border-color:rgba(255,176,46,.45);color:var(--sun)}
+.nowbox{display:none}
 .jumps{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
 .jumps button{border:1px solid var(--line);background:transparent;color:var(--ink-2);font-family:inherit;
   font-size:12.5px;font-weight:600;padding:8px 14px;border-radius:8px;cursor:pointer;transition:.16s}
@@ -217,6 +218,9 @@ footer p{margin:0;font-size:12.5px;color:var(--ink-3)}
   .top{padding:22px 14px 16px}
   .panel-head h2{letter-spacing:.08em;font-size:12px}
   .panel{padding:14px}
+  .disc .cap{display:none}            /* meno ingombro sotto il disco */
+  .disc .dbar{margin-top:10px;padding:11px 13px}
+  .disc .dbar-legend{gap:14px;font-size:11px}
   .stage{gap:14px}
   .locbar{padding:14px}
   .loc-search{min-width:0;flex-basis:100%;order:-1}
@@ -225,9 +229,23 @@ footer p{margin:0;font-size:12.5px;color:var(--ink-3)}
   .manual input{width:100%;flex:1;min-width:0}
   .manual label{flex:1;font-size:10px;letter-spacing:.06em}
   #manualGo{flex-basis:100%}
-  /* comandi: timeline a tutta larghezza, tasto play e velocità sotto */
-  .controls{gap:12px}
-  #scrub{order:-1;flex-basis:100%;min-width:0}
+  /* ---- barra di riproduzione fissa, sottile, su una sola riga ---- */
+  body{padding-bottom:100px}                 /* spazio sotto la barra fissa */
+  .jumps{margin-bottom:4px}
+  .controls{
+    position:fixed;left:0;right:0;bottom:0;z-index:60;margin:0;
+    padding:8px 10px calc(8px + env(safe-area-inset-bottom,0px));
+    flex-wrap:wrap;align-items:center;row-gap:8px;column-gap:8px;
+    background:rgba(9,12,24,.94);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+    border-top:1px solid var(--line-2);box-shadow:0 -14px 34px -14px rgba(0,0,0,.75)}
+  .controls .btn.primary{order:0;flex:0 0 auto;padding:9px 12px}
+  .controls .btn.primary span{display:none}          /* solo icona: barra più bassa */
+  #scrub{order:1;flex:1 1 80px;min-width:70px}
+  .nowbox{display:flex;order:2;flex:0 0 auto;align-items:baseline;gap:5px}
+  .nowbox strong{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+  .nowbox span{display:none}                          /* copertura già mostrata sul disco */
+  .controls .speed{order:3;flex:0 0 auto;gap:5px}
+  .controls .chip{padding:6px 8px;font-size:11px}
   .ro strong{font-size:18px}
   .ro.big strong{font-size:22px}
 }
@@ -362,6 +380,9 @@ footer p{margin:0;font-size:12.5px;color:var(--ink-3)}
     </div>
 
     <div class="controls">
+      <div class="nowbox" aria-hidden="true">
+        <strong id="nowTime">—</strong><span id="nowObs">0,0 %</span>
+      </div>
       <button id="play" class="btn primary" aria-label="Avvia animazione">
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M8 5l12 7-12 7z" fill="currentColor"/></svg>
         <span>Avvia</span>
@@ -879,6 +900,21 @@ const sgn = (v, d = 2) => (v >= 0 ? '+' : '−') + nf(Math.abs(v), d);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+/* interpreta una coordinata inserita a mano: decimale (44,678 / 44.678 / -5.85),
+   con emisfero (44.678 N, 11.038 E, 5.85 O) o in gradi-primi-secondi (44°41'12" N) */
+function parseCoord(raw) {
+  let s = String(raw == null ? '' : raw).trim().toUpperCase().replace(',', '.');
+  if (!s) return NaN;
+  let sign = /^-/.test(s) ? -1 : 1;
+  const hemi = (s.match(/[NSEWO]/g) || []).pop();
+  if (hemi === 'S' || hemi === 'W' || hemi === 'O') sign = -1;
+  else if (hemi === 'N' || hemi === 'E') sign = 1;
+  const nums = (s.replace(/[NSEWO]/g, ' ').match(/\d+(?:\.\d+)?/g) || []).map(Number);
+  if (!nums.length) return NaN;
+  const val = nums[0] + (nums[1] || 0) / 60 + (nums[2] || 0) / 3600;
+  return sign * val;
+}
+
 /* ---------- stato ---------- */
 let E = null;            // risultato del motore
 let I = null;            // indici delle colonne
@@ -980,10 +1016,10 @@ function sizeCanvas(cv, ratio, minH, maxH) {
   cv.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 function layout() {
-  // disco: quasi quadrato, compatto su mobile; cielo: più alto su schermi stretti
-  sizeCanvas(cDisc, 0.94, 250, 560);
+  // disco: quasi quadrato su desktop, più basso su mobile per far entrare anche l'orizzonte
   const narrow = window.matchMedia('(max-width:680px)').matches;
-  sizeCanvas(cSky, narrow ? 0.82 : 0.56, narrow ? 300 : 300, 470);
+  sizeCanvas(cDisc, narrow ? 0.72 : 0.94, narrow ? 220 : 250, 560);
+  sizeCanvas(cSky, narrow ? 0.82 : 0.56, 300, 470);
 }
 
 function drawDisc(d) {
@@ -1266,6 +1302,8 @@ function render(t) {
   el('roSep').textContent = nf(d.sep, 3) + '°';
   el('barVal').textContent = nf(d.ob, 1) + ' %';
   el('barFill').style.width = d.ob.toFixed(1) + '%';
+  const _nt = el('nowTime'); if (_nt) _nt.textContent = hms(cur);
+  const _no = el('nowObs'); if (_no) _no.textContent = nf(d.ob, 1) + ' %';
   const [p, c] = phase(cur);
   const tag = el('phaseTag'); tag.textContent = p; tag.style.color = c;
   tag.style.background = c === '#ff5f6d' ? 'rgba(255,95,109,.12)' : 'rgba(255,176,46,.12)';
@@ -1401,6 +1439,11 @@ function setHeader() {
   el('cElev').textContent = Math.round(place.elev) + ' m s.l.m.';
   el('cTz').textContent = tzName;
   el('dateSub').textContent = '12 agosto 2026 · ' + place.name;
+  // pre-compila i campi manuali con la località corrente: premere "Calcola" funziona subito
+  const ml = el('mLat'), mo = el('mLon'), me = el('mElev');
+  if (ml) ml.value = nf(place.lat, 4);
+  if (mo) mo.value = nf(place.lon, 4);
+  if (me) me.value = String(Math.round(place.elev));
   const pb = el('presets');
   if (pb) pb.querySelectorAll('button').forEach((x, i) => x.classList.toggle('on', PRESETS[i].name === place.name));
 }
@@ -1514,11 +1557,15 @@ document.addEventListener('click', e => {
 
 /* ---------- coordinate manuali ---------- */
 el('manualGo').addEventListener('click', async () => {
-  const lat = parseFloat(el('mLat').value.replace(',', '.'));
-  const lon = parseFloat(el('mLon').value.replace(',', '.'));
-  const elev = parseFloat(el('mElev').value.replace(',', '.')) || 0;
-  if (isNaN(lat) || isNaN(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
-    status('Coordinate non valide: latitudine −90…90, longitudine −180…180.', 'warn'); return;
+  const rawLat = el('mLat').value.trim(), rawLon = el('mLon').value.trim();
+  if (!rawLat || !rawLon) { status('Inserisci latitudine e longitudine.', 'warn'); return; }
+  const lat = parseCoord(rawLat), lon = parseCoord(rawLon);
+  const elev = parseCoord(el('mElev').value) || 0;
+  if (isNaN(lat) || isNaN(lon)) {
+    status('Coordinate non valide: usa numeri decimali, es. 44,678 e 11,038.', 'warn'); return;
+  }
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+    status('Coordinate fuori intervallo: latitudine −90…90, longitudine −180…180.', 'warn'); return;
   }
   status('Determino il fuso orario…', 'busy');
   const tz = await resolveTz(lat, lon);
